@@ -19,6 +19,7 @@ val guava_version = "16.0.1"
 val derbyVersion = "10.11.1.1"
 val jettyVersion = "9.2.16.v20160414"
 val jacksonVersion = "2.6.5"
+val splmdformatVersion = "0.0.1"
 
 val sparkDependencies = Seq(
   "com.google.guava" % "guava" % guava_version % "provided" force(),
@@ -46,7 +47,8 @@ val coreDependencies = Seq(
   "com.fasterxml.jackson.jaxrs" % "jackson-jaxrs-smile-provider" % jacksonVersion,
   "com.sparklinedata" %% "spark-datetime" % sparkdateTimeVersion,
   "com.github.scopt" %% "scopt" % scoptVersion,
-  "org.scalatest" %% "scalatest" % scalatestVersion % "test"
+  "org.scalatest" %% "scalatest" % scalatestVersion % "test",
+  "com.sparklinedata" %% "sp-mdformat" % splmdformatVersion % "provided"
 )
 
 val coreTestDependencies = Seq(
