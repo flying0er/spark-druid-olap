@@ -47,5 +47,8 @@ build/sbt-launch-*.jar
 druidRuntime/
 derby.log
 
+#test
+src/test/resources/csv/tpch/datascale1/orderLineItemPartSupplierCustomer.part/
+
 #customer
 src/test/scala/org/sparklinedata/druid/client/test/customer/

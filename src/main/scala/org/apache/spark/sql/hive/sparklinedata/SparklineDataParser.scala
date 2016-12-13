@@ -17,13 +17,14 @@
 
 package org.apache.spark.sql.hive.sparklinedata
 
+import com.sparklinedata.metadata._
 import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.parser.{ParseException, ParserInterface}
 import org.apache.spark.sql.{SQLContext, SparkSession}
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.catalyst.rules.RuleExecutor
-import org.apache.spark.sql.sparklinedata.commands.{ClearMetadata, CreateStarSchema, ExplainDruidRewrite}
+import org.apache.spark.sql.sparklinedata.commands.{ClearMetadata, CreateOlapIndex, CreateStarSchema, ExplainDruidRewrite}
 import org.apache.spark.sql.util.PlanUtil
 import org.sparklinedata.druid.metadata.{EqualityCondition, FunctionalDependencyType, StarRelationInfo, StarSchemaInfo}
 
@@ -107,6 +108,37 @@ class SparklineDruidCommandsParser(sparkSession: SparkSession) extends Sparkline
   protected val STAR = Keyword("STAR")
   protected val SCHEMA = Keyword("SCHEMA")
   protected val AS = Keyword("AS")
+  protected val OLAP = Keyword("OLAP")
+  protected val INDEX = Keyword("INDEX")
+  protected val DIMENSION = Keyword("DIMENSION")
+  protected val TIMESTAMP = Keyword("TIMESTAMP")
+  protected val IS = Keyword("IS")
+  protected val NOT = Keyword("NOT")
+  protected val NULLABLE = Keyword("NULLABLE")
+  protected val NULLVALUE = Keyword("NULLVALUE")
+  protected val SPARK = Keyword("SPARK")
+  protected val TIMESTAMPFORMAT = Keyword("TIMESTAMPFORMAT")
+  protected val METRIC = Keyword("METRIC")
+  protected val AGGREGATOR = Keyword("AGGREGATOR")
+  protected val DOUBLEMAX = Keyword("doublemax")
+  protected val LONGMAX = Keyword("longmax")
+  protected val DOUBLEMIN = Keyword("doublemin")
+  protected val LONGMIN = Keyword("longmin")
+  protected val COUNT = Keyword("count")
+  protected val DOUBLESUM = Keyword("doublesum")
+  protected val LONGSUM = Keyword("longsum")
+  protected val HYPERUNIQUE = Keyword("hyperunique")
+  protected val JAVASCRIPT = Keyword("JAVASCRIPT")
+  protected val FUNCTIONS = Keyword("FUNCTIONS")
+  protected val AGGREGATE = Keyword("AGGREGATE")
+  protected val COMBINE = Keyword("COMBINE")
+  protected val RESET = Keyword("RESET")
+  protected val DIMENSIONS = Keyword("DIMENSIONS")
+  protected val METRICS = Keyword("METRICS")
+  protected val OPTIONS = Keyword("OPTIONS")
+  protected val BY = Keyword("BY")
+  protected val PARTITION = Keyword("PARTITION")
+
 
   def parse2(input: String): ParseResult[LogicalPlan] = synchronized {
     // Initialize the Keywords.
@@ -115,7 +147,7 @@ class SparklineDruidCommandsParser(sparkSession: SparkSession) extends Sparkline
   }
 
   protected override lazy val start: Parser[LogicalPlan] =
-    clearDruidCache | execDruidQuery | explainDruidRewrite | starSchema
+    clearDruidCache | execDruidQuery | explainDruidRewrite | starSchema | createOlapIndex
 
   protected lazy val clearDruidCache: Parser[LogicalPlan] =
     CLEAR ~> DRUID ~> CACHE ~> opt(ident) ^^ {
@@ -164,6 +196,100 @@ class SparklineDruidCommandsParser(sparkSession: SparkSession) extends Sparkline
       case c ~ _ ~ _ ~ _ ~ factTable ~ Some(_ ~ starRelations)  =>
         CreateStarSchema(StarSchemaInfo(factTable, starRelations:_*), !c)
       case c ~ _ ~ _ ~ _ ~ factTable ~ None  => CreateStarSchema(StarSchemaInfo(factTable), !c)
+    }
+
+  private lazy val indexDimensionInfo : Parser[IndexDimensionInfo] = {
+    DIMENSION ~> ident ~ (
+      (IS ~ NULLABLE ~ NULLVALUE ~ stringLit) |
+        opt((IS ~ NOT ~ NULLABLE))
+      ) ^^ {
+      case c ~ (_ ~ _ ~ _ ~ s) => IndexDimensionInfo(c, true, s.toString)
+      case id ~ _ => IndexDimensionInfo(id, false, null)
+    }
+  }
+
+  private lazy val indexTimestampDimensionInfo : Parser[IndexTimestampDimensionInfo] = {
+    TIMESTAMP ~> DIMENSION ~> ident ~
+      opt(SPARK ~> TIMESTAMPFORMAT ~> stringLit) ~
+      opt(IS ~> INDEX ~> TIMESTAMP) ~ (
+      (IS ~ NULLABLE ~ NULLVALUE ~ stringLit) |
+        opt((IS ~ NOT ~ NULLABLE))
+      ) ^^ {
+      case c ~ tsFmt ~ isIdx ~ (_ ~ _ ~ _ ~ s) =>
+        IndexTimestampDimensionInfo(c, true, s.toString, tsFmt, isIdx.isDefined)
+      case c ~ tsFmt ~ isIdx ~ _ =>
+        IndexTimestampDimensionInfo(c, false, null, tsFmt, isIdx.isDefined)
+    }
+  }
+  
+  private lazy val metricBasicAggergator : Parser[IndexAggregator] = {
+    AGGREGATOR ~>
+      (DOUBLEMAX | LONGMAX | DOUBLEMIN | LONGMIN | COUNT | DOUBLESUM | LONGSUM | HYPERUNIQUE) ^^ {
+      case DOUBLEMAX.str => DoubleMaxAggregator
+      case LONGMAX.str => LongMaxAggregator
+      case DOUBLEMIN.str => DoubleMinAggregator
+      case LONGMIN.str => LongMinAggregator
+      case COUNT.str => CountAggregator
+      case DOUBLESUM.str => DoubleSumAggregator
+      case LONGSUM.str => LongSumAggregator
+      case HYPERUNIQUE.str => HyperUniquesAggregator
+    }
+  }
+
+  private lazy val javaScriptAggergator : Parser[IndexAggregator] = {
+    (AGGREGATOR ~ JAVASCRIPT) ~> rep1sep(ident, ",") ~
+      ( (FUNCTIONS ~> AGGREGATE ~> stringLit) ~
+        (COMBINE ~> stringLit) ~
+        (RESET ~> stringLit)
+        ) ^^ {
+      case fieldNames ~ (fnAggregate ~ fnReset ~ fnCombine)  =>
+        JavaScriptAggregator(fieldNames, fnAggregate, fnReset, fnCombine)
+    }
+  }
+
+  private lazy val aggregator =
+    metricBasicAggergator | javaScriptAggergator
+
+  private lazy val indexMetricInfo : Parser[IndexMetricInfo] = {
+    METRIC ~> ident ~ aggregator ~ (
+      (IS ~ NULLABLE ~ NULLVALUE ~ stringLit) |
+        opt((IS ~ NOT ~ NULLABLE))
+      ) ^^ {
+      case c ~ agg ~ (_ ~ _ ~ _ ~ s) => IndexMetricInfo(c, true, s.toString, agg)
+      case id ~ agg ~ _ => IndexMetricInfo(id, false, null, agg)
+    }
+  }
+
+  private lazy val fieldInfo : Parser[IndexFieldInfo] =
+    (indexDimensionInfo | indexTimestampDimensionInfo | indexMetricInfo)
+
+  private lazy val fieldInfos : Parser[Seq[IndexFieldInfo]] =
+    rep(fieldInfo)
+
+  private lazy val option : Parser[(String,String)] =
+    ident ~ stringLit ^^ {
+      case k ~ v => (k,v)
+    }
+
+  private lazy val partitionBy : Parser[Seq[String]] =
+    (PARTITION ~ BY) ~> rep1sep(ident, ",")
+
+  private lazy val options : Parser[Map[String,String]] =
+    rep1sep(option, opt(",")).map(_.toMap)
+
+  private lazy val createOlapIndex : Parser[LogicalPlan] =
+  (CREATE ~ OLAP ~ INDEX) ~> qualifiedId ~ (ON ~> qualifiedId) ~
+    fieldInfos ~
+    opt((DIMENSIONS ~> stringLit)) ~
+    opt((METRICS ~> stringLit)) ~
+    opt((OPTIONS ~ "(") ~> options <~ ")") ~
+    opt(partitionBy) ^^ {
+      case indexName ~ tableName ~ fieldInfos ~ dimensions ~ metrics ~ options  ~ partitionBy => {
+        val mdFmtOptions = OLAPFormatUtils.formatOptions(
+          sparkSession, indexName, tableName, fieldInfos, dimensions, metrics, options
+        )
+        CreateOlapIndex(indexName, tableName, mdFmtOptions, partitionBy.getOrElse(Seq()))
+      }
     }
 
   private lazy val createOrAlter : Parser[Boolean] =

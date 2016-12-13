@@ -25,6 +25,8 @@ import org.apache.spark.sql.types._
 import org.apache.spark.sql.{AnalysisException, Row, SparkSession}
 import org.sparklinedata.druid.metadata._
 
+import com.sparklinedata.mdformat.MDFormatOptions
+
 case class ClearMetadata(druidHost: Option[String]) extends RunnableCommand {
 
   override val output: Seq[Attribute] = {
@@ -125,8 +127,35 @@ case class CreateStarSchema(starSchemaInfo : StarSchemaInfo,
     alterTableCmd.run(sparkSession)
 
   }
-
-
 }
 
+case class CreateOlapIndex(indexName : String,
+                           sourceTableName : String,
+                           options : MDFormatOptions,
+                           partitionColumns : Seq[String]) extends RunnableCommand with Logging {
 
+  override def run(sparkSession: SparkSession): Seq[Row] = {
+
+    val threshold = sparkSession.sessionState.conf.schemaStringLengthThreshold
+    val catalog = sparkSession.sessionState.catalog
+
+    val sourceTableId = sparkSession.sessionState.sqlParser.parseTableIdentifier(sourceTableName)
+
+    val sourceTable = catalog.lookupRelation(sourceTableId)
+    val sourceTableMetaData = catalog.getTableMetadata(sourceTableId)
+
+    sourceTable.schema
+
+    /*
+     * 1. Find the sourceTableName
+     * 2. Find or Create the StarSchema on this table.
+     * 3. Create Index Schema from MDFormatOptions + SourceTable
+     * 4. Build the IndexStorageInfo from Index Schema + MDFormatOptions
+     * 5. Build Select LogicalPlan from StarSchema
+     * 6. If all columns from Source are not included, add Distinct Operator on top of 5.
+     * 7.
+     */
+
+    Seq()
+  }
+}
