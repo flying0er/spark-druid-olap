@@ -30,10 +30,8 @@ abstract class OLAPBaseTest extends StarSchemaBaseTest {
   override def beforeAll() = {
     super.beforeAll()
 
-    if (!Files.exists(new File(tpchPartFolder).toPath)) {
-      Files.createDirectories(new File(tpchPartFolder).toPath)
-      val cT =
-        s"""CREATE TABLE if not exists tpch_flat_small_part(o_orderkey integer,
+    val cT =
+      s"""CREATE TABLE if not exists tpch_flat_small_part(o_orderkey integer,
              o_custkey integer,
       o_orderstatus string, o_totalprice double, o_orderdate string, o_orderpriority string,
       o_clerk string,
@@ -59,7 +57,10 @@ abstract class OLAPBaseTest extends StarSchemaBaseTest {
       header "false", delimiter "|")
               partitioned by (shipYear, shipMonth)""".stripMargin
 
-      sql(cT)
+    sql(cT)
+
+    if (!Files.exists(new File(tpchPartFolder).toPath)) {
+      Files.createDirectories(new File(tpchPartFolder).toPath)
 
       sql(
         """

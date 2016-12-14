@@ -56,9 +56,20 @@ class CreateOlapIndexTest  extends OLAPBaseTest {
   test("createIndexOnPart") { td =>
     sql(
       s"""
-         |create olap index tpch_flat_index on orderLineItemPartSupplierBase
-         |      dimensions "$dimensions"
-         |      metrics "$metrics"
+         |create olap index tpch_flat_part_index on tpch_flat_small_part
+         |dimension p_name is not nullable
+         |dimension ps_comment is nullable nullvalue ""
+         |timestamp dimension l_shipdate spark timestampformat "yyyy-MM-dd'T'HH:mm:ss.SSS"
+                 is index timestamp
+                 is nullable nullvalue "1992-01-01T00:00:00.000"
+         |timestamp dimension o_orderdate
+         |timestamp dimension l_commitdate
+          is nullable nullvalue "1992-01-01T00:00:00.000"
+         |timestamp dimension l_receiptdate
+          is not nullable
+         |metric o_totalprice aggregator doubleSum
+         |dimensions "$dimensions"
+         |metrics "$metrics"
          |      OPTIONS (
          |        path "src/test/resources/spmd/ds_part"
          |)

@@ -19,9 +19,14 @@ package org.apache.spark.sql.hive.sparklinedata
 
 import com.sparklinedata.mdformat.MDFormatOptions
 import com.sparklinedata.metadata.IndexFieldInfo
-import org.apache.spark.sql.{SPLMDFUtils, SparkSession}
+import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.{AnalysisException, SPLMDFUtils, SparkSession}
+import org.sparklinedata.druid.metadata.{StarSchema, StarSchemaInfo}
 
 object OLAPFormatUtils {
+
+  val SPARKLINE_PREFIX = StarSchemaInfo.SPARKLINE_PREFIX
+  val SPARKLINE_OLAPINDEX_PREFIX = SPARKLINE_PREFIX + ".olapindex."
 
   def formatOptions(sparkSession : SparkSession,
                     indexName : String,
@@ -46,5 +51,49 @@ object OLAPFormatUtils {
 
     new MDFormatOptions(m, sparkSession)
   }
+
+  def indexSparkSchema(idxOptions : MDFormatOptions,
+                       partitionColumns : Seq[String],
+                       srcTableSchema : StructType) : StructType = {
+
+    val srcFieldNames = srcTableSchema.fields.map(_.name).toSet
+    val idxFields =
+      idxOptions.indexFieldInfos.map(_.name) ++
+        idxOptions.dimensions ++
+        idxOptions.metrics
+
+    (idxFields ++ partitionColumns).foreach { c =>
+
+      if (!srcFieldNames.contains(c) ) {
+        throw new AnalysisException(s"Unknown source column '$c' specified in olap index")
+      }
+    }
+
+    /*
+     * put the partition columns as the last columns in the schema.
+     */
+    val sparkFields =
+      srcTableSchema.fields.filter(f => idxFields.contains(f.name)) ++
+        srcTableSchema.fields.filter(f => partitionColumns.contains(f.name))
+
+    StructType(sparkFields)
+  }
+
+  def olapIndexes(properties : Map[String, String]) : Seq[(String,Boolean)] = {
+    properties.filterKeys {
+      case k if k.startsWith(SPARKLINE_OLAPINDEX_PREFIX) => true
+      case _ => false
+    }.map {
+      case (k,v) => {
+        val idxName = k.substring(SPARKLINE_OLAPINDEX_PREFIX.length)
+        (idxName, v.toBoolean)
+      }
+    }
+  }.toSeq
+
+  def olapIndexMetadataPropertyMap(idxName : String, isFull : Boolean) =
+    Map(
+      SPARKLINE_OLAPINDEX_PREFIX + idxName -> isFull.toString
+    )
 
 }

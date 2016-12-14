@@ -22,10 +22,13 @@ import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.execution.command.{AlterTableSetPropertiesCommand, RunnableCommand}
 import org.apache.spark.sql.sources.druid.{DruidPlanner, DruidQueryCostModel}
 import org.apache.spark.sql.types._
-import org.apache.spark.sql.{AnalysisException, Row, SparkSession}
+import org.apache.spark.sql.{AnalysisException, Dataset, Row, SparkSession}
 import org.sparklinedata.druid.metadata._
-
 import com.sparklinedata.mdformat.MDFormatOptions
+import org.apache.spark.sql.catalyst.TableIdentifier
+import org.apache.spark.sql.catalyst.catalog.SessionCatalog
+import org.apache.spark.sql.execution.datasources.{BucketSpec, CreateTableUsing}
+import org.apache.spark.sql.hive.sparklinedata.OLAPFormatUtils
 
 case class ClearMetadata(druidHost: Option[String]) extends RunnableCommand {
 
@@ -131,31 +134,100 @@ case class CreateStarSchema(starSchemaInfo : StarSchemaInfo,
 
 case class CreateOlapIndex(indexName : String,
                            sourceTableName : String,
-                           options : MDFormatOptions,
+                           parsedOptions : MDFormatOptions,
                            partitionColumns : Seq[String]) extends RunnableCommand with Logging {
 
-  override def run(sparkSession: SparkSession): Seq[Row] = {
+  val options = {
+    new MDFormatOptions(
+      parsedOptions.parameters + (MDFormatOptions.REQUIRE_ALL_SRC_COLUMNS -> "false"),
+      parsedOptions.sparkSession
+    )
+  }
 
-    val threshold = sparkSession.sessionState.conf.schemaStringLengthThreshold
-    val catalog = sparkSession.sessionState.catalog
-
-    val sourceTableId = sparkSession.sessionState.sqlParser.parseTableIdentifier(sourceTableName)
+  private def getOrCreateStarSchema(sourceTableId : TableIdentifier,
+                                    catalog : SessionCatalog)(
+                                   implicit sparkSession: SparkSession
+  ) : StarSchema = {
 
     val sourceTable = catalog.lookupRelation(sourceTableId)
     val sourceTableMetaData = catalog.getTableMetadata(sourceTableId)
 
-    sourceTable.schema
-
-    /*
-     * 1. Find the sourceTableName
-     * 2. Find or Create the StarSchema on this table.
-     * 3. Create Index Schema from MDFormatOptions + SourceTable
-     * 4. Build the IndexStorageInfo from Index Schema + MDFormatOptions
-     * 5. Build Select LogicalPlan from StarSchema
-     * 6. If all columns from Source are not included, add Distinct Operator on top of 5.
-     * 7.
-     */
-
-    Seq()
+    val existingTableProperties = sourceTableMetaData.properties
+    var starSchema = StarSchemaInfo.fromMetadataMap(existingTableProperties)
+    if (starSchema.isDefined) {
+      StarSchema(sourceTableName, starSchema.get, true)(sparkSession.sqlContext) match {
+        case Left(errMsg) => throw new AnalysisException(errMsg)
+        case Right(starSchema) => starSchema
+      }
+    } else {
+      val ssInfo = new StarSchemaInfo(sourceTableName)
+      CreateStarSchema(ssInfo, false).run(sparkSession)
+      getOrCreateStarSchema(sourceTableId, catalog)
+    }
   }
+
+  private def createIndexTable(indexTableId : TableIdentifier,
+                          indexSparkSchema : StructType)(
+    implicit sparkSession : SparkSession) : Unit = {
+    val ctUsingPlan = CreateTableUsing(
+      indexTableId,
+      Some(indexSparkSchema),
+      "spmd",
+      false,
+      options.parameters,
+      partitionColumns.toArray,
+      None,
+      false,
+      true)
+
+    log.info(s"Creating Olap Index Table $indexName")
+    Dataset.ofRows(sparkSession, ctUsingPlan)
+  }
+
+  private def addOlapIndexToTableProperties(sourceTableId : TableIdentifier,
+                                            olapIndexProps : Map[String, String])(
+                                             implicit sparkSession : SparkSession) : Unit = {
+    val alterTableCmd = new AlterTableSetPropertiesCommand(
+      sourceTableId,
+      olapIndexProps,
+      false)
+    log.info(s"Setting Olap Index for table $indexName")
+    alterTableCmd.run(sparkSession)
+  }
+
+  override def run(sparkSession: SparkSession): Seq[Row] = {
+
+    implicit val ss : SparkSession = sparkSession
+
+    val threshold = sparkSession.sessionState.conf.schemaStringLengthThreshold
+    val catalog = sparkSession.sessionState.catalog
+    val sourceTableId = sparkSession.sessionState.sqlParser.parseTableIdentifier(sourceTableName)
+    val starSchema = getOrCreateStarSchema(sourceTableId, catalog)
+    val sourceTable = catalog.lookupRelation(sourceTableId)
+    val sourceTableMetaData = catalog.getTableMetadata(sourceTableId)
+    val existingTableProperties = sourceTableMetaData.properties
+    val indexSparkSchema =
+      OLAPFormatUtils.indexSparkSchema(options, partitionColumns, sourceTable.schema)
+    val indexTableId = sparkSession.sessionState.sqlParser.parseTableIdentifier(indexName)
+
+    createIndexTable(indexTableId, indexSparkSchema)
+
+    val indexIsFull = indexSparkSchema.fields.length == sourceTable.schema.fields.length
+    val olapIndexProps = OLAPFormatUtils.olapIndexMetadataPropertyMap(indexName, indexIsFull)
+    addOlapIndexToTableProperties(sourceTableId, olapIndexProps)
+
+    Seq.empty[Row]
+  }
+
+
+  /*
+ * 1. Find the sourceTableName
+ * 2. Find or Create the StarSchema on this table.
+ * 3. Create Index Schema from MDFormatOptions + SourceTable
+ * 4. Build the IndexStorageInfo from Index Schema + MDFormatOptions
+ * 5. Build Select LogicalPlan from StarSchema
+ * 6. If all columns from Source are not included, add Distinct Operator on top of 5.
+ * 7.
+ */
+
 }
