@@ -27,7 +27,8 @@ import org.sparklinedata.druid.metadata._
 import com.sparklinedata.mdformat.MDFormatOptions
 import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.catalog.SessionCatalog
-import org.apache.spark.sql.execution.datasources.{BucketSpec, CreateTableUsing}
+import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, SubqueryAlias}
+import org.apache.spark.sql.execution.datasources.{BucketSpec, CreateTableUsing, HadoopFsRelation, LogicalRelation}
 import org.apache.spark.sql.hive.sparklinedata.OLAPFormatUtils
 
 case class ClearMetadata(druidHost: Option[String]) extends RunnableCommand {
@@ -174,7 +175,7 @@ case class CreateOlapIndex(indexName : String,
       Some(indexSparkSchema),
       "spmd",
       false,
-      options.parameters,
+      options.toCreationParameters,
       partitionColumns.toArray,
       None,
       false,
@@ -231,3 +232,74 @@ case class CreateOlapIndex(indexName : String,
  */
 
 }
+
+case class InsertOlapIndex(indexName : String,
+                           sourceTableName : String,
+                           overwrite : Boolean,
+                           partitionValues : Map[String, String])
+  extends RunnableCommand with Logging {
+
+  private def getStarSchema(sourceTableId : TableIdentifier,
+                                    catalog : SessionCatalog)(
+                                     implicit sparkSession: SparkSession
+                                   ) : StarSchema = {
+
+    val sourceTable = catalog.lookupRelation(sourceTableId)
+    val sourceTableMetaData = catalog.getTableMetadata(sourceTableId)
+    val existingTableProperties = sourceTableMetaData.properties
+    var starSchema = StarSchemaInfo.fromMetadataMap(existingTableProperties)
+    StarSchema(sourceTableName, starSchema.get, true)(sparkSession.sqlContext) match {
+      case Left(errMsg) => throw new AnalysisException(errMsg)
+      case Right(starSchema) => starSchema
+    }
+  }
+
+  def indexDetails(indexTable: LogicalPlan)(
+    implicit sparkSession: SparkSession): (StructType, StructType, Map[String, String]) =
+    indexTable match {
+      case LogicalRelation(
+      HadoopFsRelation(_, partitionSchema, dataSchema, _, _, options),
+      _, _) => (partitionSchema, dataSchema, options)
+      case SubqueryAlias(_, LogicalRelation(
+      HadoopFsRelation(_, partitionSchema, dataSchema, _, _, options),
+      _, _)) => (partitionSchema, dataSchema, options)
+      case _ => ???
+    }
+
+  override def run(sparkSession: SparkSession): Seq[Row] = {
+
+    implicit val ss : SparkSession = sparkSession
+
+    val threshold = sparkSession.sessionState.conf.schemaStringLengthThreshold
+    val catalog = sparkSession.sessionState.catalog
+    val sourceTableId = sparkSession.sessionState.sqlParser.parseTableIdentifier(sourceTableName)
+    val sourceTable = catalog.lookupRelation(sourceTableId)
+    val sourceTableMetaData = catalog.getTableMetadata(sourceTableId)
+    val existingTableProperties = sourceTableMetaData.properties
+
+    val indexTableId = sparkSession.sessionState.sqlParser.parseTableIdentifier(indexName)
+    val indexTable = catalog.lookupRelation(indexTableId)
+    val (indexPartSchema, indexSparkSchema, parameters) = indexDetails(indexTable)
+    val options = new MDFormatOptions(parameters, sparkSession)
+    val starSchema = getStarSchema(sourceTableId, catalog)
+
+    /*
+     * 1. Build SelectPlan for StarSchema
+     * 2. Add partition predicates
+     * 3. If !fullIndex
+     *      project dims + metrics + partCols
+     *      group by dims + partCols, add metric aggs
+     * 4. Cases:
+     *     (has TS, has Part Cols) -> distribute by Part Cols, Sort by TS Col
+     *     (no TS, has Part Cols) -> distribute by Part Cols
+     *     (has TS, no Part Cols) -> collate and sort by TS Col
+     *     (no TS, no Part Cols) -> do nothing.
+     * 5. Add Insert (overwrite) on top of Step 4.
+     * 6. run insert.
+     */
+
+
+    Seq.empty[Row]
+  }
+}
+

@@ -51,6 +51,12 @@ class CreateOlapIndexTest  extends OLAPBaseTest {
          |        path "src/test/resources/spmd/ds_part"
          |      )
       """.stripMargin)
+
+    sql(
+      s"""
+         |insert olap index tpch_flat_index of orderLineItemPartSupplierBase
+       """.stripMargin
+    )
   }
 
   test("createIndexOnPart") { td =>
@@ -75,6 +81,19 @@ class CreateOlapIndexTest  extends OLAPBaseTest {
          |)
          |partition by shipYear, shipMonth
       """.stripMargin)
+
+    sql(
+      s"""
+         |insert olap index tpch_flat_part_index of tpch_flat_small_part
+         | partitions shipYear="1992"
+       """.stripMargin
+    )
+
+    sql(
+      s"""
+         |insert overwrite olap index tpch_flat_part_index of tpch_flat_small_part
+       """.stripMargin
+    )
   }
 
 }

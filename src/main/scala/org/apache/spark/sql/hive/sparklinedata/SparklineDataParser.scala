@@ -24,7 +24,7 @@ import org.apache.spark.sql.catalyst.parser.{ParseException, ParserInterface}
 import org.apache.spark.sql.{SQLContext, SparkSession}
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.catalyst.rules.RuleExecutor
-import org.apache.spark.sql.sparklinedata.commands.{ClearMetadata, CreateOlapIndex, CreateStarSchema, ExplainDruidRewrite}
+import org.apache.spark.sql.sparklinedata.commands._
 import org.apache.spark.sql.util.PlanUtil
 import org.sparklinedata.druid.metadata.{EqualityCondition, FunctionalDependencyType, StarRelationInfo, StarSchemaInfo}
 
@@ -138,6 +138,9 @@ class SparklineDruidCommandsParser(sparkSession: SparkSession) extends Sparkline
   protected val OPTIONS = Keyword("OPTIONS")
   protected val BY = Keyword("BY")
   protected val PARTITION = Keyword("PARTITION")
+  protected val INSERT = Keyword("INSERT")
+  protected val OVERWRITE = Keyword("OVERWRITE")
+  protected val PARTITIONS = Keyword("PARTITIONS")
 
 
   def parse2(input: String): ParseResult[LogicalPlan] = synchronized {
@@ -147,7 +150,8 @@ class SparklineDruidCommandsParser(sparkSession: SparkSession) extends Sparkline
   }
 
   protected override lazy val start: Parser[LogicalPlan] =
-    clearDruidCache | execDruidQuery | explainDruidRewrite | starSchema | createOlapIndex
+    clearDruidCache | execDruidQuery | explainDruidRewrite |
+      starSchema | createOlapIndex | insertOlapIndex
 
   protected lazy val clearDruidCache: Parser[LogicalPlan] =
     CLEAR ~> DRUID ~> CACHE ~> opt(ident) ^^ {
@@ -290,6 +294,22 @@ class SparklineDruidCommandsParser(sparkSession: SparkSession) extends Sparkline
         )
         CreateOlapIndex(indexName, tableName, mdFmtOptions, partitionBy.getOrElse(Seq()))
       }
+    }
+
+  private lazy val partPredicate : Parser[(String,String)] =
+    ident ~ "=" ~ stringLit ^^ {
+      case k ~ _ ~ v => (k,v)
+    }
+
+  private lazy val partitionsPredicates : Parser[Map[String,String]] =
+    rep1sep(partPredicate, opt(",")).map(_.toMap)
+
+
+  private lazy val insertOlapIndex : Parser[LogicalPlan] =
+    (INSERT ~> opt(OVERWRITE) <~ OLAP <~ INDEX) ~ qualifiedId ~ (OF ~> qualifiedId) ~
+      opt(PARTITIONS ~> partitionsPredicates) ^^ {
+      case ovwrt ~ indexName ~ tableName ~ partPreds =>
+        InsertOlapIndex(indexName, tableName, ovwrt.isDefined, partPreds.getOrElse(Map()))
     }
 
   private lazy val createOrAlter : Parser[Boolean] =
