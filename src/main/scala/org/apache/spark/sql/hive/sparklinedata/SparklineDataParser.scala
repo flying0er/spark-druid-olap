@@ -25,6 +25,7 @@ import org.apache.spark.sql.{SQLContext, SparkSession}
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.catalyst.rules.RuleExecutor
 import org.apache.spark.sql.sparklinedata.commands._
+import org.apache.spark.sql.sparklinedata.olap.index.OLAPFormatUtils
 import org.apache.spark.sql.util.PlanUtil
 import org.sparklinedata.druid.metadata.{EqualityCondition, FunctionalDependencyType, StarRelationInfo, StarSchemaInfo}
 

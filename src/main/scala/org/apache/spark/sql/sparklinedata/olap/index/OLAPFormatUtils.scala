@@ -15,10 +15,15 @@
  * limitations under the License.
  */
 
-package org.apache.spark.sql.hive.sparklinedata
+package org.apache.spark.sql.sparklinedata.olap.index
 
 import com.sparklinedata.mdformat.MDFormatOptions
 import com.sparklinedata.metadata.IndexFieldInfo
+import org.apache.spark.sql.catalyst.TableIdentifier
+import org.apache.spark.sql.catalyst.catalog.SessionCatalog
+import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, SubqueryAlias}
+import org.apache.spark.sql.execution.command.CreateDataSourceTableUtils
+import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, LogicalRelation}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.{AnalysisException, SPLMDFUtils, SparkSession}
 import org.sparklinedata.druid.metadata.{StarSchema, StarSchemaInfo}
@@ -96,4 +101,42 @@ object OLAPFormatUtils {
       SPARKLINE_OLAPINDEX_PREFIX + idxName -> isFull.toString
     )
 
+  private[index] def indexDetails(indexTable: LogicalPlan):
+  (StructType, StructType, Map[String, String]) =
+    indexTable match {
+      case LogicalRelation(
+      HadoopFsRelation(_, partitionSchema, dataSchema, _, _, options),
+      _, _) => (partitionSchema, dataSchema, options)
+      case SubqueryAlias(_, LogicalRelation(
+      HadoopFsRelation(_, partitionSchema, dataSchema, _, _, options),
+      _, _)) => (partitionSchema, dataSchema, options)
+      case _ => ???
+    }
+
+  private[index] def getStarSchema(sourceTableName : String,
+                                   sourceTableId : TableIdentifier,
+                    catalog : SessionCatalog)(
+                     implicit sparkSession: SparkSession
+                   ) : StarSchema = {
+
+    val sourceTable = catalog.lookupRelation(sourceTableId)
+    val sourceTableMetaData = catalog.getTableMetadata(sourceTableId)
+    val existingTableProperties = sourceTableMetaData.properties
+    var starSchema = StarSchemaInfo.fromMetadataMap(existingTableProperties)
+    StarSchema(sourceTableName, starSchema.get, true)(sparkSession.sqlContext) match {
+      case Left(errMsg) => throw new AnalysisException(errMsg)
+      case Right(starSchema) => starSchema
+    }
+  }
+
+  private[index] def partitionColumns(tableProperties : Map[String, String]) : Seq[String] = {
+    val numPCols = tableProperties.get(CreateDataSourceTableUtils.DATASOURCE_SCHEMA_NUMPARTCOLS)
+    if ( numPCols.isDefined) {
+      (0 until numPCols.get.toInt).map { i =>
+        val key = s"${CreateDataSourceTableUtils.DATASOURCE_SCHEMA_PARTCOL_PREFIX}$i"
+        tableProperties(key)
+      }
+    } else Seq()
+
+  }
 }
