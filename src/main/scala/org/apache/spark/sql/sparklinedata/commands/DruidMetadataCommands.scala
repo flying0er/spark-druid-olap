@@ -221,17 +221,6 @@ case class CreateOlapIndex(indexName : String,
     Seq.empty[Row]
   }
 
-
-  /*
- * 1. Find the sourceTableName
- * 2. Find or Create the StarSchema on this table.
- * 3. Create Index Schema from MDFormatOptions + SourceTable
- * 4. Build the IndexStorageInfo from Index Schema + MDFormatOptions
- * 5. Build Select LogicalPlan from StarSchema
- * 6. If all columns from Source are not included, add Distinct Operator on top of 5.
- * 7.
- */
-
 }
 
 case class InsertOlapIndex(indexName : String,

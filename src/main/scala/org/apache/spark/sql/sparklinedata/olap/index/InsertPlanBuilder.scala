@@ -19,7 +19,7 @@ package org.apache.spark.sql.sparklinedata.olap.index
 
 import com.sparklinedata.mdformat.MDFormatOptions
 import com.sparklinedata.metadata._
-import org.apache.spark.sql.catalyst.analysis.UnresolvedAttribute
+import org.apache.spark.sql.catalyst.analysis.{UnresolvedAttribute, UnresolvedRelation}
 import org.apache.spark.sql.catalyst.expressions.aggregate.{HyperLogLogPlusPlus, Max, Min, Sum}
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans.logical._
@@ -84,13 +84,38 @@ class InsertPlanBuilder(val indexName: String,
  * 6. run insert.
  */
 
-
   def buildInsertPlan: LogicalPlan = {
     val starJoinPlan = joinPlan
     val withPartitionPredicatesPlan = filterPartitions(starJoinPlan)
     val gPlan = grainPlan(withPartitionPredicatesPlan)
     val rPlan = redistributePlan(gPlan)
-    rPlan
+    val indexPartSet = partitionValues.size == indexPartSchema.size
+    val fPlan = finalProject(!indexPartSet, rPlan)
+    val indexPartMap = if (indexPartSet) {
+      partitionValues.map{
+        case(p,v) => (p -> Some(v))
+      }
+    } else {
+      Map.empty[String, Option[String]]
+    }
+
+    InsertIntoTable(
+      UnresolvedRelation(indexTableId),
+      indexPartMap,
+      fPlan,
+      overwrite,
+      false
+    )
+  }
+
+  def finalProject(addPartitionColumns : Boolean, plan : LogicalPlan) : LogicalPlan = {
+    val fieldNames = indexSparkSchema.fieldNames ++ (
+      if (addPartitionColumns) indexPartSchema.fieldNames else Array[String]()
+      )
+    Project(
+    fieldNames.map(UnresolvedAttribute(_)),
+    plan
+    )
   }
 
   def redistributePlan(plan: LogicalPlan): LogicalPlan = {

@@ -88,6 +88,8 @@ class AbstractTest extends fixture.FunSuite with DruidQueryChecks with
     TestHive.setConf(DruidPlanner.TZ_ID.key, "UTC")
 
     TestHive.sparkContext.setLogLevel("INFO")
+    TestHive.setConf("spark.sql.files.openCostInBytes", (128 * 1024 * 1024).toString)
+    TestHive.setConf("spark.sql.files.maxPartitionBytes", (16 * 1024 * 1024).toString)
     
   }
 
