@@ -180,7 +180,7 @@ class InsertPlanBuilder(val indexName: String,
       plan
     } else {
 
-      val groupingExpressions: Seq[Expression] = indexSchema.dimensions.map { d =>
+      val groupingExpressions: Seq[UnresolvedAttribute] = indexSchema.dimensions.map { d =>
         UnresolvedAttribute(d.sparkColumn)
       } ++ {
         indexPartSchema.fields.map { f =>
@@ -192,25 +192,25 @@ class InsertPlanBuilder(val indexName: String,
         indexSchema.metrics.map { m =>
           val ar = UnresolvedAttribute(m.sparkColumn)
           m.aggregator match {
-            case DoubleMinAggregator => Min(ar).toAggregateExpression()
-            case DoubleMaxAggregator => Max(ar).toAggregateExpression()
-            case DoubleSumAggregator => Sum(ar).toAggregateExpression()
-            case LongMinAggregator => Min(ar).toAggregateExpression()
-            case LongMaxAggregator => Max(ar).toAggregateExpression()
-            case LongSumAggregator => Sum(ar).toAggregateExpression()
+            case DoubleMinAggregator => Alias(Min(ar).toAggregateExpression(), m.name)()
+            case DoubleMaxAggregator => Alias(Max(ar).toAggregateExpression(), m.name)()
+            case DoubleSumAggregator => Alias(Sum(ar).toAggregateExpression(), m.name)()
+            case LongMinAggregator => Alias(Min(ar).toAggregateExpression(), m.name)()
+            case LongMaxAggregator => Alias(Max(ar).toAggregateExpression(), m.name)()
+            case LongSumAggregator => Alias(Sum(ar).toAggregateExpression(), m.name)()
             case CardinalityAggregator(List(f), true)
-              if f == m.name => HyperLogLogPlusPlus(ar).toAggregateExpression()
+              if f == m.name => Alias(HyperLogLogPlusPlus(ar).toAggregateExpression(), m.name)()
             case _ => throw new AnalysisException(
               s"Cannot index metric at a higher grain$m : \n\t" +
                 "unsupported Aggregation Type for indexing, " +
                 "only full index supported this aggregation type.")
           }
-        }.map(e => Alias(e, e.toString)())
+        }
       }
 
       Aggregate(
         groupingExpressions,
-        aggregateExpressions,
+        groupingExpressions ++ aggregateExpressions,
         plan)
     }
   }
