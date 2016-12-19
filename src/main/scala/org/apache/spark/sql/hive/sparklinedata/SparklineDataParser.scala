@@ -128,7 +128,7 @@ class SparklineDruidCommandsParser(sparkSession: SparkSession) extends Sparkline
   protected val COUNT = Keyword("count")
   protected val DOUBLESUM = Keyword("doublesum")
   protected val LONGSUM = Keyword("longsum")
-  protected val HYPERUNIQUE = Keyword("hyperunique")
+  protected val CARDINALITY = Keyword("cardinality")
   protected val JAVASCRIPT = Keyword("JAVASCRIPT")
   protected val FUNCTIONS = Keyword("FUNCTIONS")
   protected val AGGREGATE = Keyword("AGGREGATE")
@@ -142,6 +142,8 @@ class SparklineDruidCommandsParser(sparkSession: SparkSession) extends Sparkline
   protected val INSERT = Keyword("INSERT")
   protected val OVERWRITE = Keyword("OVERWRITE")
   protected val PARTITIONS = Keyword("PARTITIONS")
+  protected val AVERAGE = Keyword("AVERAGE")
+  protected val SIZE = Keyword("SIZE")
 
 
   def parse2(input: String): ParseResult[LogicalPlan] = synchronized {
@@ -203,33 +205,40 @@ class SparklineDruidCommandsParser(sparkSession: SparkSession) extends Sparkline
       case c ~ _ ~ _ ~ _ ~ factTable ~ None  => CreateStarSchema(StarSchemaInfo(factTable), !c)
     }
 
+  private lazy val avgSize : Parser[Option[Int]] = {
+    opt(AVERAGE ~> SIZE ~> numericLit) ^^ {
+      case Some(n) => Some(n.toInt)
+      case _ => None
+    }
+  }
+
   private lazy val indexDimensionInfo : Parser[IndexDimensionInfo] = {
-    DIMENSION ~> ident ~ (
+    DIMENSION ~> ident ~ avgSize ~ (
       (IS ~ NULLABLE ~ NULLVALUE ~ stringLit) |
         opt((IS ~ NOT ~ NULLABLE))
       ) ^^ {
-      case c ~ (_ ~ _ ~ _ ~ s) => IndexDimensionInfo(c, true, s.toString)
-      case id ~ _ => IndexDimensionInfo(id, false, null)
+      case c ~ avgSz ~ (_ ~ _ ~ _ ~ s) => IndexDimensionInfo(c, true, s.toString, avgSz)
+      case id ~ avgSz ~ _ => IndexDimensionInfo(id, false, null, avgSz)
     }
   }
 
   private lazy val indexTimestampDimensionInfo : Parser[IndexTimestampDimensionInfo] = {
-    TIMESTAMP ~> DIMENSION ~> ident ~
+    TIMESTAMP ~> DIMENSION ~> ident ~ avgSize ~
       opt(SPARK ~> TIMESTAMPFORMAT ~> stringLit) ~
       opt(IS ~> INDEX ~> TIMESTAMP) ~ (
       (IS ~ NULLABLE ~ NULLVALUE ~ stringLit) |
         opt((IS ~ NOT ~ NULLABLE))
       ) ^^ {
-      case c ~ tsFmt ~ isIdx ~ (_ ~ _ ~ _ ~ s) =>
-        IndexTimestampDimensionInfo(c, true, s.toString, tsFmt, isIdx.isDefined)
-      case c ~ tsFmt ~ isIdx ~ _ =>
-        IndexTimestampDimensionInfo(c, false, null, tsFmt, isIdx.isDefined)
+      case c ~ avgSz ~ tsFmt ~ isIdx ~ (_ ~ _ ~ _ ~ s) =>
+        IndexTimestampDimensionInfo(c, true, s.toString, tsFmt, isIdx.isDefined, avgSz)
+      case c ~ avgSz ~ tsFmt ~ isIdx ~ _ =>
+        IndexTimestampDimensionInfo(c, false, null, tsFmt, isIdx.isDefined, avgSz)
     }
   }
   
   private lazy val metricBasicAggergator : Parser[IndexAggregator] = {
     AGGREGATOR ~>
-      (DOUBLEMAX | LONGMAX | DOUBLEMIN | LONGMIN | COUNT | DOUBLESUM | LONGSUM | HYPERUNIQUE) ^^ {
+      (DOUBLEMAX | LONGMAX | DOUBLEMIN | LONGMIN | COUNT | DOUBLESUM | LONGSUM | CARDINALITY) ^^ {
       case DOUBLEMAX.str => DoubleMaxAggregator
       case LONGMAX.str => LongMaxAggregator
       case DOUBLEMIN.str => DoubleMinAggregator
@@ -237,8 +246,14 @@ class SparklineDruidCommandsParser(sparkSession: SparkSession) extends Sparkline
       case COUNT.str => CountAggregator
       case DOUBLESUM.str => DoubleSumAggregator
       case LONGSUM.str => LongSumAggregator
-      case HYPERUNIQUE.str => HyperUniquesAggregator
+      case CARDINALITY.str => CardinalityAggregator(List(), true)
     }
+  }
+
+  private def fixCardinalityAggregator(mNm : String,
+                                       a : IndexAggregator) =  a match {
+    case CardinalityAggregator(_, _) => CardinalityAggregator(List(mNm), true)
+    case a => a
   }
 
   private lazy val javaScriptAggergator : Parser[IndexAggregator] = {
@@ -256,12 +271,14 @@ class SparklineDruidCommandsParser(sparkSession: SparkSession) extends Sparkline
     metricBasicAggergator | javaScriptAggergator
 
   private lazy val indexMetricInfo : Parser[IndexMetricInfo] = {
-    METRIC ~> ident ~ aggregator ~ (
+    METRIC ~> ident ~ aggregator ~ avgSize ~ (
       (IS ~ NULLABLE ~ NULLVALUE ~ stringLit) |
         opt((IS ~ NOT ~ NULLABLE))
       ) ^^ {
-      case c ~ agg ~ (_ ~ _ ~ _ ~ s) => IndexMetricInfo(c, true, s.toString, agg)
-      case id ~ agg ~ _ => IndexMetricInfo(id, false, null, agg)
+      case c ~ agg ~ avgSize ~ (_ ~ _ ~ _ ~ s) =>
+        IndexMetricInfo(c, true, s.toString, fixCardinalityAggregator(c, agg), avgSize)
+      case id ~ agg ~ avgSize ~  _ =>
+        IndexMetricInfo(id, false, null, fixCardinalityAggregator(id, agg), avgSize)
     }
   }
 
