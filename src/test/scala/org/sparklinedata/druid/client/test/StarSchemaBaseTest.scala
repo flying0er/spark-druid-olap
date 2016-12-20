@@ -187,6 +187,20 @@ class StarSchemaBaseTest extends BaseTest with BeforeAndAfterAll with SPLLogging
 
     TestHive.table("lineitembase").cache
 
+    sql(s"""CREATE TABLE if not exists lineitem_small(l_orderkey integer,
+        l_partkey integer, l_suppkey integer,
+      l_linenumber integer,
+      l_quantity double, l_extendedprice double, l_discount double, l_tax double,
+      l_returnflag string,
+      l_linestatus string, l_shipdate string, l_commitdate string, l_receiptdate string,
+      l_shipinstruct string,
+      l_shipmode string, l_comment string)
+      USING com.databricks.spark.csv
+      OPTIONS (path "${tpchDataFolder("lineitem.small")}",
+      header "false", delimiter "|")""".stripMargin)
+
+    TestHive.table("lineitem_small").cache
+
     sql(s"""CREATE TABLE if not exists orders(
            |o_orderkey integer, o_custkey integer,
            |    o_orderstatus VARCHAR(1),
@@ -292,7 +306,7 @@ class StarSchemaBaseTest extends BaseTest with BeforeAndAfterAll with SPLLogging
 
     TestHive.setConf(DruidPlanner.SPARKLINEDATA_CACHE_TABLES_TOCHECK.key,
       "orderLineItemPartSupplierBase,suppregion,suppnation," +
-        "custregion,custnation,customer,part,supplier,partsupp,orders,lineitembase")
+        "custregion,custnation,customer,part,supplier,partsupp,orders,lineitembase,lineitem_small")
 
     /*
      * for -ve testing only

@@ -29,8 +29,7 @@ import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.catalog.SessionCatalog
 import org.apache.spark.sql.catalyst.plans.logical.{LogicalPlan, SubqueryAlias}
 import org.apache.spark.sql.execution.datasources.{CreateTableUsing, HadoopFsRelation, LogicalRelation}
-import org.apache.spark.sql.sparklinedata.olap.index.OLAPFormatUtils
-import org.apache.spark.sql.sparklinedata.olap.index.InsertPlanBuilder
+import org.apache.spark.sql.sparklinedata.olap.index.{InsertPlanBuilder, OLAPFormatUtils, StarSchemaPlanBuilder}
 
 case class ClearMetadata(druidHost: Option[String]) extends RunnableCommand {
 
@@ -204,12 +203,18 @@ case class CreateOlapIndex(indexName : String,
     val threshold = sparkSession.sessionState.conf.schemaStringLengthThreshold
     val catalog = sparkSession.sessionState.catalog
     val sourceTableId = sparkSession.sessionState.sqlParser.parseTableIdentifier(sourceTableName)
-    val starSchema = getOrCreateStarSchema(sourceTableId, catalog)
+    val sSchema = getOrCreateStarSchema(sourceTableId, catalog)
+
+    val ssBuilder = new StarSchemaPlanBuilder {
+      val sparkSession: SparkSession = ss
+      val catalog: SessionCatalog = ss.sessionState.catalog
+      val starSchema: StarSchema = sSchema
+    }
     val sourceTable = catalog.lookupRelation(sourceTableId)
     val sourceTableMetaData = catalog.getTableMetadata(sourceTableId)
     val existingTableProperties = sourceTableMetaData.properties
     val indexSparkSchema =
-      OLAPFormatUtils.indexSparkSchema(options, partitionColumns, sourceTable.schema)
+      OLAPFormatUtils.indexSparkSchema(options, partitionColumns, ssBuilder.sparkSchema)
     val indexTableId = sparkSession.sessionState.sqlParser.parseTableIdentifier(indexName)
 
     createIndexTable(indexTableId, indexSparkSchema)
@@ -228,33 +233,6 @@ case class InsertOlapIndex(indexName : String,
                            overwrite : Boolean,
                            partitionValues : Map[String, String])
   extends RunnableCommand with Logging {
-
-  private def getStarSchema(sourceTableId : TableIdentifier,
-                                    catalog : SessionCatalog)(
-                                     implicit sparkSession: SparkSession
-                                   ) : StarSchema = {
-
-    val sourceTable = catalog.lookupRelation(sourceTableId)
-    val sourceTableMetaData = catalog.getTableMetadata(sourceTableId)
-    val existingTableProperties = sourceTableMetaData.properties
-    var starSchema = StarSchemaInfo.fromMetadataMap(existingTableProperties)
-    StarSchema(sourceTableName, starSchema.get, true)(sparkSession.sqlContext) match {
-      case Left(errMsg) => throw new AnalysisException(errMsg)
-      case Right(starSchema) => starSchema
-    }
-  }
-
-  def indexDetails(indexTable: LogicalPlan)(
-    implicit sparkSession: SparkSession): (StructType, StructType, Map[String, String]) =
-    indexTable match {
-      case LogicalRelation(
-      HadoopFsRelation(_, partitionSchema, dataSchema, _, _, options),
-      _, _) => (partitionSchema, dataSchema, options)
-      case SubqueryAlias(_, LogicalRelation(
-      HadoopFsRelation(_, partitionSchema, dataSchema, _, _, options),
-      _, _)) => (partitionSchema, dataSchema, options)
-      case _ => ???
-    }
 
   override def run(sparkSession: SparkSession): Seq[Row] = {
 

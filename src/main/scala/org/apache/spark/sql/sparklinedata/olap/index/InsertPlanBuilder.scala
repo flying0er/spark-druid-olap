@@ -183,6 +183,10 @@ class InsertPlanBuilder(val indexName: String,
       val groupingExpressions: Seq[UnresolvedAttribute] = indexSchema.dimensions.map { d =>
         UnresolvedAttribute(d.sparkColumn)
       } ++ {
+        indexSchema.timestampColumn.map{tC =>
+          UnresolvedAttribute(tC.sparkColumn)
+        }.toSeq
+      } ++ {
         indexPartSchema.fields.map { f =>
           UnresolvedAttribute(f.name)
         }

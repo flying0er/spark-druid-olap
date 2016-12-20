@@ -23,6 +23,7 @@ import org.apache.spark.sql.catalyst.catalog.SessionCatalog
 import org.apache.spark.sql.catalyst.expressions.{And, Attribute, EqualTo, Expression}
 import org.apache.spark.sql.catalyst.plans.Inner
 import org.apache.spark.sql.catalyst.plans.logical.{Join, LogicalPlan}
+import org.apache.spark.sql.types.StructType
 import org.sparklinedata.druid.metadata.{StarRelation, StarSchema, StarTable}
 
 trait StarSchemaPlanBuilder {
@@ -36,6 +37,16 @@ trait StarSchemaPlanBuilder {
       val tableId = sparkSession.sessionState.sqlParser.parseTableIdentifier(tblNm)
       (tblNm -> catalog.lookupRelation(tableId, None))
     }.toMap
+  }
+
+  lazy val joiningColumns : Set[String] = {
+    starSchema.tableMap.values.flatMap{
+      case StarTable(_, Some(starRelation)) => {
+        starRelation.joiningKeys.flatMap(jk => Set(jk._1, jk._2))
+      }
+      case _ => Set.empty[String]
+
+    }.toSet
   }
 
   private def attrRef(tableName: String,
@@ -63,22 +74,21 @@ trait StarSchemaPlanBuilder {
     }
   }
 
-  def isBefore(st1: StarTable, st2: StarTable): Boolean = {
-    if (st1 == starSchema.factTable) {
-      true
-    } else if (st2 == starSchema.factTable) {
-      false
-    } else if (st1.parent.get.tableName != starSchema.factTable.name) {
-      isBefore(starSchema.tableMap(st1.parent.get.tableName), st2)
-    } else if (st2.parent.get.tableName != starSchema.factTable.name) {
-      isBefore(st1, starSchema.tableMap(st2.parent.get.tableName))
-    } else {
-      st1.name < st2.name
-    }
-  }
+  def starSchemaTablesInJoinOrder = {
+    val ll = scala.collection.mutable.LinkedHashSet[StarTable]()
 
-  def starSchemaTablesInJoinOrder =
-    starSchema.tableMap.values.toList.sortWith(isBefore)
+    def addTable(starTable: StarTable) : Unit = starTable match {
+      case st@StarTable(nm, Some(starRelation)) if !ll.contains(st) => {
+        addTable(starSchema.tableMap(starRelation.tableName))
+        ll.add(st)
+      }
+      case st@StarTable(nm, None) if !ll.contains(st) => ll.add(st)
+      case _ => ()
+    }
+
+    starSchema.tableMap.values.foreach(t => addTable(t))
+    ll.toList
+  }
 
   def joinPlan: LogicalPlan = {
     val tables = starSchemaTablesInJoinOrder
@@ -92,5 +102,9 @@ trait StarSchemaPlanBuilder {
         )
     }
 
+  }
+
+  def sparkSchema : StructType = {
+    joinPlan.schema
   }
 }
