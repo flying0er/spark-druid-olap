@@ -49,6 +49,7 @@ derby.log
 
 #test
 src/test/resources/csv/tpch/datascale1/orderLineItemPartSupplierCustomer.part/
+src/test/resources/spmd/
 
 #customer
 src/test/scala/org/sparklinedata/druid/client/test/customer/

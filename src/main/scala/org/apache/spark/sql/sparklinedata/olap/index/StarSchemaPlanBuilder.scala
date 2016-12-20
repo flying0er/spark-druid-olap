@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.sparklinedata.olap.index
 
+import com.sparklinedata.metadata.IndexSchema
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.analysis.UnresolvedAttribute
 import org.apache.spark.sql.catalyst.catalog.SessionCatalog
@@ -25,6 +26,30 @@ import org.apache.spark.sql.catalyst.plans.Inner
 import org.apache.spark.sql.catalyst.plans.logical.{Join, LogicalPlan}
 import org.apache.spark.sql.types.StructType
 import org.sparklinedata.druid.metadata.{StarRelation, StarSchema, StarTable}
+
+
+/**
+  *
+  * @param starSchemaToFactRatio based on the fields in the StarSchema tables vs. fields in
+  *                              the Fact Table. This ratio >= 1
+  * @param indexToStarSchemaRatio based on the fields in the Index vs all the fields in the
+  *                               Star Schema. This ratio <= 1
+  */
+case class OLAPIndexSizeRatios(
+                              starSchemaToFactRatio : Double,
+                              indexToStarSchemaRatio : Double
+                              ) {
+  /**
+    * Given the factTable size estimate, estimate the input to indexing by
+    * marking for the Dimension Table Columns and marking down for the
+    * columns not in the OLAP index.
+    * @param factTableSz
+    * @return
+    */
+  def indexInputEstimate(factTableSz : Long) : Long = {
+    (factTableSz * starSchemaToFactRatio * indexToStarSchemaRatio).toLong
+  }
+}
 
 trait StarSchemaPlanBuilder {
 
@@ -106,5 +131,27 @@ trait StarSchemaPlanBuilder {
 
   def sparkSchema : StructType = {
     joinPlan.schema
+  }
+
+  def sizeRatios(indexSchema : IndexSchema) : OLAPIndexSizeRatios = {
+    val indexFields = indexSchema.columnMap.values.map(_.name).toList
+
+    def schemaSz(schema : StructType) : Int = {
+      schema.fields.map{ f =>
+        if (indexSchema.columnMap.contains(f.name)) {
+          val iF = indexSchema.columnMap(f.name)
+          iF.indexColInfo.avgSize
+        } else {
+          f.dataType.defaultSize
+        }
+      }.sum
+    }
+
+    val starSchemaRowSize = schemaSz(this.sparkSchema)
+    val factRowSize = schemaSz(tablePlanMap(starSchema.factTable.name).schema)
+    OLAPIndexSizeRatios(
+      starSchemaRowSize.toDouble / factRowSize.toDouble,
+      indexSchema.estimateInputRowSize.toDouble / starSchemaRowSize.toDouble
+    )
   }
 }

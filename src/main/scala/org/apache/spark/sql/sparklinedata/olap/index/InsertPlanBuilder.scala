@@ -61,8 +61,8 @@ class InsertPlanBuilder(val indexName: String,
   val indexSchema =
     new IndexSchema(IndexStorageInfo(options, indexSparkSchema), indexSparkSchema)
 
-  val sizePerTask: Long = {
-    (options.preferredSegmentSize * options.indexSizeReductionPercent).toLong
+  val inputSizePerTask: Long = {
+    options.preferredSegmentSize
   }
 
   def inputHasTimestampColumn = indexSchema.timestampColumn.isDefined
@@ -122,7 +122,11 @@ class InsertPlanBuilder(val indexName: String,
     val (hasTS, isPartitionInput) = (inputHasTimestampColumn, isPartitionInsert)
     val inSize = inputSize(sourceTable)
     var currPlan = plan
-    val numInTasks = inSize.map(sz => Math.max((sz / sizePerTask).toInt, 1))
+    val oLAPIndexSizeRatios = sizeRatios(indexSchema)
+    val numInTasks = inSize.map(sz => Math.max(
+      (oLAPIndexSizeRatios.indexInputEstimate(sz).toDouble / inputSizePerTask).ceil.toInt,
+      1)
+    )
 
     currPlan = if (isPartitionInput) {
 
